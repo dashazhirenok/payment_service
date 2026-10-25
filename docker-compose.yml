@@ -1,0 +1,82 @@
+x-app-env: &app-env
+  DATABASE_URL: postgresql+asyncpg://payments:payments@postgres:5432/payments
+  RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+  API_KEY: ${API_KEY:-dev-api-key}
+  WEBHOOK_SECRET: ${WEBHOOK_SECRET:-dev-webhook-secret}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: payments
+      POSTGRES_PASSWORD: payments
+      POSTGRES_DB: payments
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payments -d payments"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  rabbitmq:
+    image: rabbitmq:4.1-management-alpine
+    # RabbitMQ хранит данные в папке с именем узла rabbit@<hostname>. Без фиксированного
+    # имени при каждом пересоздании контейнера оно новое, и брокер стартует пустым.
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"  # веб-интерфейс, guest/guest
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  api:
+    build: .
+    # Сначала миграции, потом сервер. exec — чтобы SIGTERM получал сам uvicorn.
+    command: ["sh", "-c", "alembic upgrade head && exec uvicorn --factory payment_service.api.main:app --host 0.0.0.0 --port 8000"]
+    environment: *app-env
+    ports:
+      - "8000:8000"
+    # От RabbitMQ не зависит: API принимает платежи, даже пока брокер лежит,
+    # а outbox relay отправит их, когда брокер поднимется.
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  consumer:
+    build: .
+    command: ["python", "-m", "payment_service.consumer"]
+    environment: *app-env
+    # Ждём api: он готов только после миграций, значит таблицы уже созданы.
+    depends_on:
+      api:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 40s  # дольше, чем consumer дорабатывает сообщения (30 с)
+
+  # Заглушка получателя webhook-ов для примеров из README (локальный httpbin). Не часть
+  # сервиса: стартует только с профилем demo — docker compose --profile demo up -d.
+  # Consumer обращается к ней по имени сервиса: http://httpbin:8080/post, /status/503 и т. д.
+  httpbin:
+    image: mccutchen/go-httpbin:2.24.0
+    profiles: ["demo"]
+
+volumes:
+  postgres-data:
+  rabbitmq-data:

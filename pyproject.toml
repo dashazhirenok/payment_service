@@ -1,0 +1,68 @@
+[project]
+name = "payment-service"
+version = "0.1.0"
+description = "Asynchronous payment processing service: FastAPI + PostgreSQL + RabbitMQ (transactional outbox)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7,<3.0",
+    "pydantic-settings>=2.3,<3.0",
+    "sqlalchemy[asyncio]>=2.0,<3.0",
+    "asyncpg>=0.29",
+    "alembic>=1.13",
+    "faststream[rabbit]>=0.7,<0.8",
+    "aiohttp>=3.9,<4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27,<1.0",  # тестовый клиент для FastAPI
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/payment_service"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+# Сгенерировано Alembic (alembic init / revision --autogenerate), под стиль проекта не правим.
+extend-exclude = ["migrations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "ASYNC", "RUF", "S"]
+ignore = [
+    "S311",  # random нужен только эмулятору шлюза, не для безопасности
+    "RUF001", "RUF002", "RUF003",  # комментарии на русском: кириллица — не опечатка
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+mypy_path = "src"
+packages = ["payment_service"]
+
+[[tool.mypy.overrides]]
+module = ["faststream.*", "aio_pika.*", "aiormq.*"]
+ignore_missing_imports = true
